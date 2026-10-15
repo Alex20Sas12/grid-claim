@@ -1,0 +1,8 @@
+name = "grid-claim"
+main = "index.js"
+compatibility_date = "2025-07-02"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "GAMES"
+id = "69a65617797d4630a8eb9e1da2f15034"
