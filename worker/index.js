@@ -133,6 +133,28 @@ const CORS = {
   "Cache-Control": "no-store",
 };
 
+// ponytail: KV has a 10 write rps/namespace limit on free tier; retry briefly instead
+// of returning 429 to the client. Upgrade path: R2 or Durable Objects if matches get hot.
+async function kvPut(env, key, value) {
+  for (let i = 0; ; i++) {
+    try {
+      await env.GAMES.put(key, value, { expirationTtl: MATCH_TTL });
+      return;
+    } catch (e) {
+      const parts = [
+        (e && e.message) || "",
+        (e && e.cause && (e.cause.message || String(e.cause))) || "",
+        String(e),
+      ].join(" | ");
+      const is429 = /429|Too Many Requests/i.test(parts);
+      if (is429 && i < 30) {
+        await new Promise((r) => setTimeout(r, 150 + Math.random() * 200));
+        continue;
+      }
+      throw new Error("KV PUT failed: " + parts);
+    }
+  }
+}
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
@@ -494,7 +516,7 @@ export default {
         if (!Array.isArray(kinds) || kinds.length < 2 || kinds.length > 4) return bad("players must be 2-4");
         for (const k of kinds) if (!["human", "agent", "bot"].includes(k)) return bad("bad kind: " + k);
         const m = newMatch(kinds);
-        await env.GAMES.put(m.id, JSON.stringify(m), { expirationTtl: MATCH_TTL });
+        await kvPut(env, m.id, JSON.stringify(m));
         return json(m, 201);
       }
       // GET /match/:id
@@ -524,7 +546,7 @@ export default {
             m.seeds[actor] -= 1;
           }
           applyMove(m, actor, mv.x, mv.y, mv.action);
-          await env.GAMES.put(mid, JSON.stringify(m), { expirationTtl: MATCH_TTL });
+          await kvPut(env, mid, JSON.stringify(m));
           return json(m);
         } catch (e) {
           return bad("bot error: " + (e && e.message ? e.message : String(e)), 500);
@@ -550,7 +572,7 @@ export default {
           m.seeds[actor] -= 1;
         } else return bad("bad action", 400);
         applyMove(m, actor, x, y, action);
-        await env.GAMES.put(mid, JSON.stringify(m), { expirationTtl: MATCH_TTL });
+        await kvPut(env, mid, JSON.stringify(m));
         return json(m);
       }
       return notFound();
